@@ -1,8 +1,12 @@
 import re
 import requests
 import os
+import cv2
+import numpy as np
+from pyzbar.pyzbar import decode
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageEntityTextUrl
+from io import BytesIO
 
 # 📌 ตั้งค่าบัญชี Telegram
 api_id = 29316101
@@ -37,7 +41,7 @@ def extract_angpao_codes(text):
 def claim_angpao(code, phone):
     url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
     try:
-        response = requests.get(url, timeout=3)  # ลด timeout เหลือ 3 วินาที
+        response = requests.get(url, timeout=2)  # ลด timeout เหลือ 2 วินาที
         return response.json() if response.status_code == 200 else None
     except Exception:
         return None
@@ -79,6 +83,30 @@ async def message_handler(event):
 
     if angpao_codes:
         await process_angpao(angpao_codes, text)
+
+# 📌 ฟังก์ชันสแกน QR Code และดึงลิงก์ซอง
+def extract_qr_code(image):
+    try:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        barcodes = decode(gray)
+        for barcode in barcodes:
+            url = barcode.data.decode("utf-8")
+            if "gift.truemoney.com/campaign/?v=" in url:
+                return extract_angpao_codes(url)
+    except Exception:
+        return []
+    return []
+
+# 📌 ดักจับ QR Code ที่ส่งมาเป็นรูปภาพ
+@client.on(events.NewMessage)
+async def qr_code_handler(event):
+    if event.photo:
+        img = await event.download_media(BytesIO())
+        img = cv2.imdecode(np.frombuffer(img.getvalue(), np.uint8), cv2.IMREAD_COLOR)
+
+        angpao_codes = extract_qr_code(img)
+        if angpao_codes:
+            await process_angpao(angpao_codes, "📸 ซองจาก QR Code!")
 
 # 📌 คำสั่งเพิ่ม/ลบเบอร์
 @client.on(events.NewMessage(pattern=r"/(add|remove|list)"))
