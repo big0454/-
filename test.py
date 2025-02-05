@@ -1,101 +1,120 @@
 import re
 import requests
 import asyncio
-from telethon import TelegramClient, events
-from PIL import Image
-import io
 import cv2
 import numpy as np
-import pyzbar.pyzbar as pyzbar  # ใช้สำหรับสแกน QR Code
+from pyzbar.pyzbar import decode
+from telethon import TelegramClient, events, Button
 
-# 📌 ตั้งค่าบัญชี Telegram
+# 📌 ตั้งค่า Telegram API
 api_id = 29316101
 api_hash = "81d03af65c3d3a442f38559d3967e28c"
-phone_numbers = ["0967942956", "0951417365", "0959694413", "0829196672", "0659599070"]
+bot_owner_id = 7094215368  # 🔴 เปลี่ยนเป็น Telegram ID ของคุณ
 notify_group_id = -1002405260670  # ไอดีกลุ่มที่จะแจ้งเตือน
+phone_numbers_file = "phone_numbers.txt"  # ไฟล์เบอร์โทร
 
 # 🔥 สร้าง client
 client = TelegramClient("truemoney_bot", api_id, api_hash)
 
-# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ (จับทุกกรณี)
+# 📌 โหลดเบอร์โทรจากไฟล์
+def load_phone_numbers():
+    try:
+        with open(phone_numbers_file, "r") as f:
+            return [line.strip() for line in f.readlines() if line.strip()]
+    except FileNotFoundError:
+        return []
+
+# 📌 บันทึกเบอร์โทรลงไฟล์
+def save_phone_number(phone, add=True):
+    numbers = set(load_phone_numbers())
+    if add:
+        numbers.add(phone)
+        message = f"✅ เพิ่มเบอร์ {phone} เรียบร้อย"
+    else:
+        numbers.discard(phone)
+        message = f"❌ ลบเบอร์ {phone} เรียบร้อย"
+
+    with open(phone_numbers_file, "w") as f:
+        f.write("\n".join(numbers))
+    
+    return message
+
+# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
     return re.findall(r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)", text)
 
+# 📌 ฟังก์ชันดึงรหัสซองจาก QR Code
+def extract_from_qr(image_path):
+    image = cv2.imread(image_path)
+    qr_codes = decode(image)
+    return [obj.data.decode("utf-8") for obj in qr_codes]
+
 # 📌 ฟังก์ชันส่ง API รับเงิน
-def claim_angpao(code, phone):
+async def claim_angpao(code, phone):
     url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
     try:
-        response = requests.get(url, timeout=3)  # ลด timeout ให้เร็วขึ้น
-        return response.json() if response.status_code == 200 else None
+        response = await asyncio.to_thread(requests.get, url, timeout=3)  # ใช้ asyncio ให้เร็วขึ้น
+        data = response.json() if response.status_code == 200 else None
+        return phone, data
     except Exception:
-        return None
+        return phone, None
 
-# 📌 ฟังก์ชันประมวลผลซองอั่งเปา
+# 📌 ฟังก์ชันประมวลผลซอง
 async def process_angpao(angpao_codes, original_text):
-    for angpao_code in angpao_codes:
-        print(f"🎁 พบซอง: {angpao_code}")
+    phone_numbers = load_phone_numbers()
+    tasks = [claim_angpao(code, phone) for code in angpao_codes for phone in phone_numbers]
+    results = await asyncio.gather(*tasks)
 
-        results = []
-        tasks = []
-        for phone in phone_numbers:
-            tasks.append(asyncio.to_thread(claim_angpao, angpao_code, phone))  # ใช้ async เร่งความเร็ว
+    messages = []
+    for phone, response in results:
+        if response and "data" in response and "voucher" in response["data"]:
+            amount = response["data"]["voucher"].get("amount_baht", "0.00")
+            status_msg = response["status"].get("message", "สำเร็จ")
+        else:
+            amount = "0.00"
+            status_msg = "❌ ไม่สามารถดึงข้อมูลได้"
 
-        responses = await asyncio.gather(*tasks)
+        messages.append(f"📲 เบอร์: {phone}\n💰 ได้รับ: {amount} บาท\n📜 สถานะ: {status_msg}")
 
-        for i, response in enumerate(responses):
-            phone = phone_numbers[i]
-            if response and "data" in response and "voucher" in response["data"]:
-                amount = response["data"]["voucher"].get("amount_baht", "0.00")
-                status_msg = response["status"].get("message", "สำเร็จ")
-            else:
-                amount = "0.00"
-                status_msg = "❌ ไม่สามารถดึงข้อมูลได้"
-
-            result_text = f"📲 เบอร์: {phone}\n💰 ได้รับ: {amount} บาท\n📜 สถานะ: {status_msg}"
-            results.append(result_text)
-
-        # 📌 แจ้งเตือนในกลุ่ม Telegram
-        final_msg = f"🎉 ซองใหม่! 🎁\n🔗 {original_text}\n\n" + "\n\n".join(results)
+    if messages:
+        final_msg = f"🎉 ซองใหม่! 🎁\n🔗 {original_text}\n\n" + "\n\n".join(messages)
         await client.send_message(notify_group_id, final_msg)
 
-# 📌 ฟังก์ชันสแกน QR Code จากรูปภาพ
-def decode_qr_code(image_data):
-    try:
-        # โหลดภาพจากไบต์
-        image = Image.open(io.BytesIO(image_data))
-        image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
-
-        # ใช้ pyzbar สแกน QR Code
-        decoded_objects = pyzbar.decode(image)
-        for obj in decoded_objects:
-            qr_text = obj.data.decode("utf-8")
-            if "gift.truemoney.com/campaign/" in qr_text:
-                return qr_text  # คืนค่าลิงก์ที่อยู่ใน QR Code
-    except Exception as e:
-        print(f"⚠️ Error decoding QR Code: {e}")
-    
-    return None
-
-# 📌 ดักจับข้อความทุกประเภท (Text, Forward, Reply, Caption)
+# 📌 ดักจับข้อความ / Forward / Caption
 @client.on(events.NewMessage)
 async def message_handler(event):
-    text = event.raw_text  # อ่านข้อความทั้งหมด
+    text = event.raw_text
     angpao_codes = extract_angpao_codes(text)
 
     if angpao_codes:
         await process_angpao(angpao_codes, text)
 
-# 📌 ดักจับรูปภาพ (QR Code)
-@client.on(events.NewMessage(func=lambda e: e.photo))
-async def photo_handler(event):
-    photo = await event.download_media(bytes)  # ดาวน์โหลดรูปเป็นไบต์
-    qr_link = decode_qr_code(photo)
+    # 📌 คำสั่งเพิ่ม/ลบเบอร์ (เฉพาะเจ้าของบอท)
+    if event.sender_id == bot_owner_id:
+        if text.startswith("/add "):
+            phone = text.replace("/add ", "").strip()
+            if re.match(r"^\d{10}$", phone):
+                message = save_phone_number(phone, add=True)
+            else:
+                message = "⚠️ กรุณากรอกเบอร์ให้ถูกต้อง (10 หลัก)"
+            await event.respond(message)
 
-    if qr_link:
-        print(f"📸 พบ QR Code: {qr_link}")
-        angpao_codes = extract_angpao_codes(qr_link)
-        if angpao_codes:
-            await process_angpao(angpao_codes, qr_link)
+        elif text.startswith("/del "):
+            phone = text.replace("/del ", "").strip()
+            message = save_phone_number(phone, add=False)
+            await event.respond(message)
+
+        elif text == "/list":
+            phone_list = "\n".join(load_phone_numbers()) or "📭 ยังไม่มีเบอร์ในระบบ"
+            await event.respond(f"📋 รายการเบอร์ที่ใช้รับซอง:\n{phone_list}")
+
+# 📌 ดักจับปุ่มกดที่มีลิงก์ซอง
+@client.on(events.CallbackQuery)
+async def button_handler(event):
+    data = event.data.decode("utf-8")
+    angpao_codes = extract_angpao_codes(data)
+    if angpao_codes:
+        await process_angpao(angpao_codes, data)
 
 # 📌 เริ่มรันบอท
 print("🔄 กำลังรันบอท...")
