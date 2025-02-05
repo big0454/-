@@ -3,14 +3,14 @@ import requests
 import asyncio
 from telethon import TelegramClient, events
 
-# ✅ ตั้งค่าบัญชี Telegram
+# 📌 ตั้งค่าบัญชี Telegram
 api_id = 29316101
 api_hash = "81d03af65c3d3a442f38559d3967e28c"
-owner_id = 7094215368  # 🔥 ไอดีเจ้าของที่สามารถใช้คำสั่งจัดการเบอร์ได้
-notify_group_id = -1002405260670  # 🔥 กลุ่มที่จะแจ้งเตือน
+owner_id = 7094215368  # 🔥 ไอดีเจ้าของที่ใช้จัดการเบอร์
+notify_group_id = -1002405260670  # 🔥 กลุ่มแจ้งเตือน
 phone_file = "phone_numbers.txt"  # 📄 ไฟล์เก็บเบอร์
 
-# ✅ ฟังก์ชันโหลดเบอร์จากไฟล์
+# 🔥 โหลดเบอร์จากไฟล์
 def load_phone_numbers():
     try:
         with open(phone_file, "r") as f:
@@ -18,39 +18,40 @@ def load_phone_numbers():
     except FileNotFoundError:
         return []
 
-# ✅ ฟังก์ชันบันทึกเบอร์ลงไฟล์
+# 🔥 บันทึกเบอร์ลงไฟล์
 def save_phone_numbers(numbers):
     with open(phone_file, "w") as f:
-        f.write("\n".join(numbers) + "\n")
+        f.write("\n".join(numbers))
 
-# ✅ ดึงเบอร์ปัจจุบัน
-phone_numbers = load_phone_numbers()
+phone_numbers = load_phone_numbers()  # โหลดเบอร์เริ่มต้น
 
 # 🔥 สร้าง client
 client = TelegramClient("truemoney_bot", api_id, api_hash)
 
-# ✅ ฟังก์ชันดึงรหัสซองจากข้อความ (จับได้ทุกกรณี)
+# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
     return re.findall(r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)", text)
 
-# ✅ ฟังก์ชันส่ง API รับเงิน
-def claim_angpao(code, phone):
+# 📌 ฟังก์ชันส่ง API รับเงิน (เร็วสุด)
+async def claim_angpao_async(code, phone):
     url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
     try:
-        response = requests.get(url, timeout=3)  # ⏳ ลด timeout ให้เร็วสุด
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, lambda: requests.get(url, timeout=3))  # ⏩ ลด timeout
         return response.json() if response.status_code == 200 else None
     except Exception:
         return None
 
-# ✅ ฟังก์ชันประมวลผลซองอั่งเปา
+# 📌 ฟังก์ชันประมวลผลซอง (เร็วขึ้น 3 เท่า)
 async def process_angpao(angpao_codes, original_text):
     for angpao_code in angpao_codes:
         print(f"🎁 พบซอง: {angpao_code}")
 
-        results = []
-        for phone in phone_numbers:
-            response = claim_angpao(angpao_code, phone)
+        tasks = [claim_angpao_async(angpao_code, phone) for phone in phone_numbers]  # ⏩ เรียก API พร้อมกัน
+        responses = await asyncio.gather(*tasks)
 
+        results = []
+        for phone, response in zip(phone_numbers, responses):
             if response and "data" in response and "voucher" in response["data"]:
                 amount = response["data"]["voucher"].get("amount_baht", "0.00")
                 status_msg = response["status"].get("message", "สำเร็จ")
@@ -61,71 +62,64 @@ async def process_angpao(angpao_codes, original_text):
             result_text = f"📲 เบอร์: {phone}\n💰 ได้รับ: {amount} บาท\n📜 สถานะ: {status_msg}"
             results.append(result_text)
 
-        # ✅ แจ้งเตือนในกลุ่ม Telegram
+        # 📌 แจ้งเตือนในกลุ่ม Telegram
         final_msg = f"🎉 ซองใหม่! 🎁\n🔗 {original_text}\n\n" + "\n\n".join(results)
         await client.send_message(notify_group_id, final_msg)
 
-# ✅ ดักจับข้อความทุกประเภท (รวมถึงข้อความสีฟ้า)
+# 📌 ดักจับข้อความใหม่
 @client.on(events.NewMessage)
 async def message_handler(event):
-    if event.photo:  # ❌ ข้ามรูปภาพ
-        return
-
-    text = event.raw_text  # ✅ อ่านข้อความทั้งหมด
+    text = event.raw_text
     angpao_codes = extract_angpao_codes(text)
-
-    # ✅ ตรวจจับลิงก์ในปุ่มกด (ข้อความสีฟ้า)
-    if event.message.buttons:
-        for row in event.message.buttons:
-            for button in row:
-                if button.url:  # ✅ ดึง URL จากปุ่ม
-                    angpao_codes.extend(extract_angpao_codes(button.url))
-
-    # ✅ ตรวจจับลิงก์จากข้อความที่ถูก forward (ส่งต่อ)
-    if event.message.forward and event.message.forward.text:
-        angpao_codes.extend(extract_angpao_codes(event.message.forward.text))
 
     if angpao_codes:
         await process_angpao(angpao_codes, text)
 
-# ✅ ฟังก์ชันเพิ่มเบอร์ (ใช้ได้เฉพาะเจ้าของ)
-@client.on(events.NewMessage(pattern=r"^/add (\d{10})$"))
-async def add_phone(event):
+# 📌 ดักจับปุ่มกด
+@client.on(events.CallbackQuery)
+async def button_handler(event):
+    data = event.data.decode("utf-8")
+    angpao_codes = extract_angpao_codes(data)
+
+    if angpao_codes:
+        await process_angpao(angpao_codes, data)
+
+# 📌 ฟังก์ชันเพิ่ม/ลบเบอร์ผ่านบอท
+@client.on(events.NewMessage)
+async def manage_phone_numbers(event):
+    global phone_numbers
+
     if event.sender_id != owner_id:
-        return await event.reply("❌ คุณไม่มีสิทธิ์เพิ่มเบอร์")
+        return  # ❌ ไม่ใช่เจ้าของ ห้ามใช้คำสั่ง
 
-    new_phone = event.pattern_match.group(1)
-    if new_phone in phone_numbers:
-        return await event.reply(f"⚠️ เบอร์ {new_phone} มีอยู่แล้ว")
+    text = event.raw_text.strip()
 
-    phone_numbers.append(new_phone)
-    save_phone_numbers(phone_numbers)
-    await event.reply(f"✅ เพิ่มเบอร์ {new_phone} สำเร็จ")
+    # ✅ เพิ่มเบอร์
+    if text.startswith("!เพิ่มเบอร์"):
+        new_number = text.split("!เพิ่มเบอร์", 1)[-1].strip()
+        if new_number.isdigit() and new_number not in phone_numbers:
+            phone_numbers.append(new_number)
+            save_phone_numbers(phone_numbers)
+            await event.reply(f"✅ เพิ่มเบอร์สำเร็จ: {new_number}")
+        else:
+            await event.reply("❌ เบอร์ไม่ถูกต้อง หรือมีอยู่แล้ว")
 
-# ✅ ฟังก์ชันลบเบอร์ (ใช้ได้เฉพาะเจ้าของ)
-@client.on(events.NewMessage(pattern=r"^/del (\d{10})$"))
-async def del_phone(event):
-    if event.sender_id != owner_id:
-        return await event.reply("❌ คุณไม่มีสิทธิ์ลบเบอร์")
+    # ✅ ลบเบอร์
+    elif text.startswith("!ลบเบอร์"):
+        del_number = text.split("!ลบเบอร์", 1)[-1].strip()
+        if del_number in phone_numbers:
+            phone_numbers.remove(del_number)
+            save_phone_numbers(phone_numbers)
+            await event.reply(f"✅ ลบเบอร์สำเร็จ: {del_number}")
+        else:
+            await event.reply("❌ เบอร์นี้ไม่มีอยู่ในระบบ")
 
-    del_phone = event.pattern_match.group(1)
-    if del_phone not in phone_numbers:
-        return await event.reply(f"⚠️ เบอร์ {del_phone} ไม่มีในระบบ")
+    # ✅ แสดงเบอร์ทั้งหมด
+    elif text.startswith("!เบอร์ทั้งหมด"):
+        numbers_text = "\n".join(phone_numbers) if phone_numbers else "ไม่มีเบอร์ในระบบ"
+        await event.reply(f"📋 เบอร์ที่ใช้รับซอง:\n{numbers_text}")
 
-    phone_numbers.remove(del_phone)
-    save_phone_numbers(phone_numbers)
-    await event.reply(f"✅ ลบเบอร์ {del_phone} สำเร็จ")
-
-# ✅ ฟังก์ชันดูเบอร์ทั้งหมด (ใช้ได้เฉพาะเจ้าของ)
-@client.on(events.NewMessage(pattern=r"^/list$"))
-async def list_phones(event):
-    if event.sender_id != owner_id:
-        return await event.reply("❌ คุณไม่มีสิทธิ์ดูเบอร์")
-
-    phone_list = "\n".join(phone_numbers) if phone_numbers else "⚠️ ยังไม่มีเบอร์ในระบบ"
-    await event.reply(f"📋 เบอร์ทั้งหมด:\n\n{phone_list}")
-
-# ✅ เริ่มรันบอท
+# 📌 เริ่มรันบอท
 print("🔄 กำลังรันบอท...")
 with client:
     client.run_until_disconnected()
