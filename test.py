@@ -32,9 +32,16 @@ def save_phone_numbers(phone_numbers):
 # 📌 อ่านเบอร์
 phone_numbers = load_phone_numbers()
 
-# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ
+# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ (รองรับลิงก์ที่ติดกับตัวอักษรอื่น)
 def extract_angpao_codes(text):
-    return re.findall(r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)", text)
+    pattern = r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)"
+    matches = re.findall(pattern, text)
+
+    # 📌 ตรวจจับกรณีที่ลิงก์ติดตัวอักษรอื่น เช่น "ควดยดมhttps://gift.truemoney.com/campaign?v=..."
+    cleaned_text = re.sub(r"[^a-zA-Z0-9:/?=._-]", "", text)  # ลบอักขระที่ไม่ใช่ URL ออก
+    matches += re.findall(pattern, cleaned_text)
+
+    return matches
 
 # 📌 ฟังก์ชันส่ง API รับเงิน (ลด timeout ให้ไวขึ้น)
 def claim_angpao(code, phone):
@@ -68,7 +75,7 @@ async def process_angpao(angpao_codes, original_text):
         final_msg = f"🎉 ซองใหม่! 🎁\n🔗 {original_text}\n\n" + "\n\n".join(results)
         await client.send_message(notify_group_id, final_msg)
 
-# 📌 ดักจับข้อความทุกประเภท (ข้อความธรรมดา + ลิงก์สีฟ้า)
+# 📌 ดักจับข้อความทุกประเภท (ข้อความธรรมดา + ลิงก์สีฟ้า + ลิงก์ที่ติดตัวอักษร)
 @client.on(events.NewMessage)
 async def message_handler(event):
     text = event.raw_text  # อ่านข้อความทั้งหมด
