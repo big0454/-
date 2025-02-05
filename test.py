@@ -6,7 +6,6 @@ import numpy as np
 from pyzbar.pyzbar import decode
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageEntityTextUrl
-from io import BytesIO
 
 # 📌 ตั้งค่าบัญชี Telegram
 api_id = 29316101
@@ -35,13 +34,13 @@ phone_numbers = load_phone_numbers()
 
 # 📌 ฟังก์ชันดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
-    return re.findall(r"https?://gift\.truemoney\.com/campaign\?v=([\w\d]+)", text)
+    return re.findall(r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)", text)
 
-# 📌 ฟังก์ชันส่ง API รับเงิน
+# 📌 ฟังก์ชันส่ง API รับเงิน (ลด timeout ให้ไวขึ้น)
 def claim_angpao(code, phone):
     url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
     try:
-        response = requests.get(url, timeout=2)  # ลด timeout เพื่อความเร็ว
+        response = requests.get(url, timeout=2)  # ลด timeout เหลือ 2 วินาที
         return response.json() if response.status_code == 200 else None
     except Exception:
         return None
@@ -69,7 +68,7 @@ async def process_angpao(angpao_codes, original_text):
         final_msg = f"🎉 ซองใหม่! 🎁\n🔗 {original_text}\n\n" + "\n\n".join(results)
         await client.send_message(notify_group_id, final_msg)
 
-# 📌 ดักจับข้อความทุกประเภท (ข้อความปกติ, ข้อความสีฟ้า, ลิงก์ซ่อน)
+# 📌 ดักจับข้อความทุกประเภท (ข้อความธรรมดา + ลิงก์สีฟ้า)
 @client.on(events.NewMessage)
 async def message_handler(event):
     text = event.raw_text  # อ่านข้อความทั้งหมด
@@ -84,29 +83,33 @@ async def message_handler(event):
     if angpao_codes:
         await process_angpao(angpao_codes, text)
 
-# 📌 ฟังก์ชันสแกน QR Code และดึงลิงก์ซอง
-def extract_qr_code(image):
-    try:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        barcodes = decode(gray)
-        for barcode in barcodes:
-            url = barcode.data.decode("utf-8")
-            if "gift.truemoney.com/campaign/?v=" in url:
-                return extract_angpao_codes(url)
-    except Exception:
-        return []
-    return []
-
-# 📌 ดักจับ QR Code ที่ส่งมาเป็นรูปภาพ
+# 📌 ดักจับ QR Code จากรูปภาพ
 @client.on(events.NewMessage)
-async def qr_code_handler(event):
+async def image_handler(event):
     if event.photo:
-        img = await event.download_media(BytesIO())
-        img = cv2.imdecode(np.frombuffer(img.getvalue(), np.uint8), cv2.IMREAD_COLOR)
+        # 📥 ดาวน์โหลดรูปภาพ
+        file_path = await event.download_media()
 
-        angpao_codes = extract_qr_code(img)
+        # 📌 อ่าน QR Code จากรูป
+        angpao_codes = scan_qr_code(file_path)
+
         if angpao_codes:
-            await process_angpao(angpao_codes, "📸 ซองจาก QR Code!")
+            await process_angpao(angpao_codes, "QR Code")
+
+        # 🗑️ ลบไฟล์ที่ดาวน์โหลด (ลดพื้นที่เก็บข้อมูล)
+        os.remove(file_path)
+
+# 📌 ฟังก์ชันสแกน QR Code
+def scan_qr_code(image_path):
+    img = cv2.imread(image_path)
+    qr_codes = decode(img)
+
+    angpao_codes = []
+    for qr in qr_codes:
+        text = qr.data.decode("utf-8")
+        angpao_codes += extract_angpao_codes(text)
+
+    return angpao_codes
 
 # 📌 คำสั่งเพิ่ม/ลบเบอร์
 @client.on(events.NewMessage(pattern=r"/(add|remove|list)"))
