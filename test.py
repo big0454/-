@@ -65,7 +65,7 @@ async def process_angpao(angpao_codes, original_text):
         final_msg = f"🎉 ซองใหม่! 🎁\n🔗 {original_text}\n\n" + "\n\n".join(results)
         await client.send_message(notify_group_id, final_msg)
 
-# ✅ ดักจับข้อความทุกประเภท (ยกเว้นรูปภาพ)
+# ✅ ดักจับข้อความทุกประเภท (รวมถึงข้อความสีฟ้า)
 @client.on(events.NewMessage)
 async def message_handler(event):
     if event.photo:  # ❌ ข้ามรูปภาพ
@@ -73,6 +73,17 @@ async def message_handler(event):
 
     text = event.raw_text  # ✅ อ่านข้อความทั้งหมด
     angpao_codes = extract_angpao_codes(text)
+
+    # ✅ ตรวจจับลิงก์ในปุ่มกด (ข้อความสีฟ้า)
+    if event.message.buttons:
+        for row in event.message.buttons:
+            for button in row:
+                if button.url:  # ✅ ดึง URL จากปุ่ม
+                    angpao_codes.extend(extract_angpao_codes(button.url))
+
+    # ✅ ตรวจจับลิงก์จากข้อความที่ถูก forward (ส่งต่อ)
+    if event.message.forward and event.message.forward.text:
+        angpao_codes.extend(extract_angpao_codes(event.message.forward.text))
 
     if angpao_codes:
         await process_angpao(angpao_codes, text)
