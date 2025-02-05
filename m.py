@@ -1,79 +1,58 @@
-import asyncio
-from telethon import TelegramClient, events
 import re
-import aiohttp
+import requests
+from telethon import TelegramClient, events
 
-# ตั้งค่าบัญชี Telegram
-API_ID = 29316101
-API_HASH = "81d03af65c3d3a442f38559d3967e28c"
-SESSION_NAME = "my_telegram_session"
+# 📌 ตั้งค่าบัญชี Telegram
+api_id = 29316101
+api_hash = "81d03af65c3d3a442f38559d3967e28c"
+phone_numbers = ["0967942956", 0951417365", "0959694413", "0829196672", "0659599070"]
+notify_group_id = -1002405260670  # ไอดีกลุ่มที่จะแจ้งเตือน
 
-# เบอร์ที่ใช้เติมซอง
-PHONE_NUMBERS = [ "0967942956", "0951417365", "0829196672", "0659599070", "0959694413", "0632466383"]
+# 🔥 สร้าง client
+client = TelegramClient("my_telegram_session", api_id, api_hash)
 
-# กลุ่มที่ต้องแจ้งเตือน
-GROUP_NOTIFY_ID = -1002405260670  
+# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ
+def extract_angpao_code(text):
+    match = re.search(r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)", text)
+    return match.group(1) if match else None
 
-# URL API สำหรับเติมเงิน
-API_URL = "https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
-
-# สร้าง Telegram Client
-client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-
-# ฟังก์ชันดักจับลิงก์ซองทุกแบบ
-def extract_angpao_links(text):
-    return re.findall(r"https?://gift\.truemoney\.com/campaign/\??v=([a-zA-Z0-9]+)", text)
-
-# ฟังก์ชันเติมซองพร้อมกัน
-async def fetch_angpao(session, code, phone):
-    url = API_URL.format(code=code, phone=phone)
+# 📌 ฟังก์ชันส่ง API รับเงิน
+def claim_angpao(code, phone):
+    url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
     try:
-        async with session.get(url) as response:
-            data = await response.json()
-            status = data.get("status", {}).get("message", "").lower()
-            amount = data.get("data", {}).get("my_ticket", {}).get("amount_baht", "ไม่ระบุ")
-            return phone, amount if "success" in status else None
+        response = requests.get(url, timeout=10)
+        return response.json() if response.status_code == 200 else None
     except Exception as e:
-        print(f"❌ Error with {phone}: {e}")
-        return phone, None
+        return {"status": {"message": f"Error: {str(e)}"}}
 
-# ดักจับทุกข้อความที่มีลิงก์ซอง
+# 📌 ดักข้อความใหม่ที่มีลิงก์ซอง
 @client.on(events.NewMessage)
 async def handler(event):
-    message_text = event.raw_text  # ข้อความที่มองเห็น
-    found_links = extract_angpao_links(message_text)  # ดึงลิงก์จากข้อความ
+    text = event.message.text
+    angpao_code = extract_angpao_code(text)
 
-    # ✅ ตรวจจับลิงก์ที่ซ่อนอยู่ในข้อความ (inline link)
-    if event.message.entities:
-        for entity in event.message.entities:
-            if isinstance(entity, events.message.MessageEntityTextUrl):
-                url = entity.url
-                found_links += extract_angpao_links(url)
+    if angpao_code:
+        print(f"🎁 พบซอง: {angpao_code}")
 
-    if found_links:
-        print(f"🔍 พบซอง: {found_links}")  
+        results = []
+        for phone in phone_numbers:
+            response = claim_angpao(angpao_code, phone)
 
-        async with aiohttp.ClientSession() as session:
-            for code in found_links:
-                tasks = [fetch_angpao(session, code, phone) for phone in PHONE_NUMBERS]
-                results = await asyncio.gather(*tasks)
+            if response and "data" in response and "voucher" in response["data"]:
+                amount = response["data"]["voucher"].get("amount_baht", "0.00")
+                status_msg = response["status"].get("message", "ไม่ทราบสถานะ")
+            else:
+                amount = "0.00"
+                status_msg = "❌ ไม่สามารถดึงข้อมูลได้"
 
-                success_list = [f"{phone} ({amount} บาท)" for phone, amount in results if amount]
-                failed_list = [phone for phone, amount in results if not amount]
+            result_text = f"📲 เบอร์: {phone}\n💰 ได้รับ: {amount} บาท\n📜 สถานะ: {status_msg}"
+            results.append(result_text)
 
-                # แจ้งเตือนไปที่กลุ่ม
-                status_message = f"🧧 **ซองที่ได้รับ:** https://gift.truemoney.com/campaign?v={code}\n\n"
-                if success_list:
-                    status_message += f"✅ **เติมสำเร็จ:**\n" + "\n".join(success_list) + "\n\n"
-                if failed_list:
-                    status_message += f"❌ **เติมไม่สำเร็จ:** {', '.join(failed_list)}"
+        # 📌 แจ้งเตือนในกลุ่ม Telegram
+        final_msg = f"🎉 ซองใหม่! 🎁\n🔗 {text}\n\n" + "\n\n".join(results)
+        await client.send_message(notify_group_id, final_msg)
 
-                await client.send_message(GROUP_NOTIFY_ID, status_message)
-
-# รันบอท
-async def main():
-    await client.start()
-    print("🔄 กำลังรันบอท...")
-    await client.run_until_disconnected()
-
-asyncio.run(main())
+# 📌 เริ่มรันบอท
+print("🔄 กำลังรันบอท...")
+with client:
+    client.run_until_disconnected()
