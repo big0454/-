@@ -33,15 +33,15 @@ def save_phone_numbers(phone_numbers):
 # 📌 อ่านเบอร์
 phone_numbers = load_phone_numbers()
 
-# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ (อัปเดต regex ให้รองรับทุกกรณี)
+# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
     return re.findall(r"https?://gift\.truemoney\.com/campaign\?v=([\w\d]+)", text)
 
-# 📌 ฟังก์ชันส่ง API รับเงิน (ลด timeout ให้ไวขึ้น)
+# 📌 ฟังก์ชันส่ง API รับเงิน
 def claim_angpao(code, phone):
     url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
     try:
-        response = requests.get(url, timeout=2)  # ลด timeout เหลือ 2 วินาที
+        response = requests.get(url, timeout=2)  # ลด timeout เพื่อความเร็ว
         return response.json() if response.status_code == 200 else None
     except Exception:
         return None
@@ -75,10 +75,10 @@ async def message_handler(event):
     text = event.raw_text  # อ่านข้อความทั้งหมด
     angpao_codes = extract_angpao_codes(text)
 
-    # 📌 ตรวจสอบข้อความที่ฝังลิงก์
+    # 📌 ตรวจสอบข้อความที่ฝังลิงก์ (ข้อความสีฟ้า)
     if event.message.entities:
         for entity in event.message.entities:
-            if isinstance(entity, MessageEntityTextUrl):  # ตรวจสอบว่าเป็นลิงก์ซ่อนอยู่
+            if isinstance(entity, MessageEntityTextUrl):  # ตรวจสอบว่าเป็นลิงก์ซ่อน
                 angpao_codes += extract_angpao_codes(entity.url)
 
     if angpao_codes:
