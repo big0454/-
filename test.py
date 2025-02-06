@@ -48,7 +48,7 @@ async def claim_angpao(code, phone):
     headers = {"User-Agent": "Mozilla/5.0"}  # ปรับ header ให้ API เร็วขึ้น
     try:
         async with requests.Session() as session:
-            response = await asyncio.to_thread(session.get, url, headers=headers, timeout=1)
+            response = await asyncio.to_thread(session.get, url, headers=headers, timeout=2)
             return response.json() if response.status_code == 200 else None
     except Exception:
         return None
