@@ -1,25 +1,55 @@
 import re
 import requests
-from telethon import TelegramClient, events, Button
+import os
+import cv2
+import numpy as np
+from pyzbar.pyzbar import decode
+from telethon import TelegramClient, events
+from telethon.tl.types import MessageEntityTextUrl
 
 # 📌 ตั้งค่าบัญชี Telegram
 api_id = 29316101
 api_hash = "81d03af65c3d3a442f38559d3967e28c"
-phone_numbers = ["0967942956", "0951417365", "0959694413", "0829196672", "0659599070"]
 notify_group_id = -1002405260670  # ไอดีกลุ่มที่จะแจ้งเตือน
+admin_id = 7094215368  # ไอดีของเจ้าของที่สามารถเพิ่ม/ลบเบอร์ได้
+phone_file = "phone_numbers.txt"
 
 # 🔥 สร้าง client
 client = TelegramClient("truemoney_bot", api_id, api_hash)
 
-# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ (จับได้ทุกกรณี)
+# 📌 โหลดเบอร์จากไฟล์
+def load_phone_numbers():
+    if os.path.exists(phone_file):
+        with open(phone_file, "r") as f:
+            return [line.strip() for line in f.readlines() if line.strip()]
+    return []
+
+# 📌 บันทึกเบอร์ลงไฟล์
+def save_phone_numbers(phone_numbers):
+    with open(phone_file, "w") as f:
+        f.write("\n".join(phone_numbers) + "\n")
+
+# 📌 อ่านเบอร์
+phone_numbers = load_phone_numbers()
+
+# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
-    return re.findall(r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)", text)
+    pattern = r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)"
+    matches = re.findall(pattern, text)
+
+    words = text.split()
+    for word in words:
+        found = re.findall(pattern, word)
+        if found:
+            matches.extend(found)
+
+    return list(set(matches))  # ลบค่าซ้ำออก
 
 # 📌 ฟังก์ชันส่ง API รับเงิน
 def claim_angpao(code, phone):
     url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
     try:
-        response = requests.get(url, timeout=5)  # ลด timeout ให้เร็วขึ้น
+        response = requests.get(url, timeout=2)  # ลด timeout เหลือ 2 วินาที
         return response.json() if response.status_code == 200 else None
     except Exception:
         return None
@@ -27,6 +57,7 @@ def claim_angpao(code, phone):
 # 📌 ฟังก์ชันประมวลผลซองอั่งเปา
 async def process_angpao(angpao_codes, original_text):
     for angpao_code in angpao_codes:
+        link = f"https://gift.truemoney.com/campaign/?v={angpao_code}"
         print(f"🎁 พบซอง: {angpao_code}")
 
         results = []
@@ -44,26 +75,77 @@ async def process_angpao(angpao_codes, original_text):
             results.append(result_text)
 
         # 📌 แจ้งเตือนในกลุ่ม Telegram
-        final_msg = f"🎉 ซองใหม่! 🎁\n🔗 {original_text}\n\n" + "\n\n".join(results)
-        await client.send_message(notify_group_id, final_msg)
+        final_msg = f"🎉 ซองใหม่! 🎁\n🔗 **[กดรับซองที่นี่]({link})**\n\n" + "\n\n".join(results)
+        await client.send_message(notify_group_id, final_msg, link_preview=False)
 
-# 📌 ดักจับข้อความทุกประเภท (Text, Forward, Reply, Caption)
+# 📌 ดักจับข้อความทุกประเภท
 @client.on(events.NewMessage)
 async def message_handler(event):
-    text = event.raw_text  # อ่านข้อความทั้งหมด
+    text = event.raw_text
     angpao_codes = extract_angpao_codes(text)
 
+    if event.message.entities:
+        for entity in event.message.entities:
+            if isinstance(entity, MessageEntityTextUrl):
+                angpao_codes += extract_angpao_codes(entity.url)
+
+    angpao_codes = list(set(angpao_codes))  # ลบค่าซ้ำ
     if angpao_codes:
         await process_angpao(angpao_codes, text)
 
-# 📌 ดักจับปุ่มกดที่มีลิงก์ซอง
-@client.on(events.CallbackQuery)
-async def button_handler(event):
-    data = event.data.decode("utf-8")  # แปลงข้อมูลปุ่มเป็นข้อความ
-    angpao_codes = extract_angpao_codes(data)
+# 📌 ดักจับ QR Code จากรูปภาพ
+@client.on(events.NewMessage)
+async def image_handler(event):
+    if event.photo:
+        file_path = await event.download_media()
+        angpao_codes = scan_qr_code(file_path)
 
-    if angpao_codes:
-        await process_angpao(angpao_codes, data)
+        if angpao_codes:
+            await process_angpao(angpao_codes, "QR Code")
+
+        os.remove(file_path)
+
+# 📌 ฟังก์ชันสแกน QR Code
+def scan_qr_code(image_path):
+    img = cv2.imread(image_path)
+    qr_codes = decode(img)
+
+    angpao_codes = []
+    for qr in qr_codes:
+        text = qr.data.decode("utf-8")
+        angpao_codes += extract_angpao_codes(text)
+
+    return list(set(angpao_codes))
+
+# 📌 คำสั่งเพิ่ม/ลบเบอร์
+@client.on(events.NewMessage(pattern=r"/(add|remove|list)"))
+async def manage_phone(event):
+    global phone_numbers
+    if event.sender_id != admin_id:
+        return await event.reply("❌ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้")
+
+    command, *args = event.text.split()
+    if command == "/add" and args:
+        new_number = args[0]
+        if new_number not in phone_numbers:
+            phone_numbers.append(new_number)
+            save_phone_numbers(phone_numbers)
+            await event.reply(f"✅ เพิ่มเบอร์ {new_number} สำเร็จ!")
+        else:
+            await event.reply(f"⚠️ เบอร์ {new_number} มีอยู่แล้ว!")
+
+    elif command == "/remove" and args:
+        del_number = args[0]
+        if del_number in phone_numbers:
+            phone_numbers.remove(del_number)
+            save_phone_numbers(phone_numbers)
+            await event.reply(f"✅ ลบเบอร์ {del_number} สำเร็จ!")
+        else:
+            await event.reply(f"⚠️ ไม่พบเบอร์ {del_number} ในระบบ!")
+
+    elif command == "/list":
+        phone_list = "\n".join(phone_numbers) if phone_numbers else "ไม่มีเบอร์ในระบบ"
+        await event.reply(f"📜 เบอร์ที่ใช้งานอยู่:\n{phone_list}")
 
 # 📌 เริ่มรันบอท
 print("🔄 กำลังรันบอท...")
