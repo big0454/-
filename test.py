@@ -1,6 +1,6 @@
 import re
 import asyncio
-import requests
+import aiohttp
 import os
 import redis
 import cv2
@@ -29,51 +29,46 @@ def load_phone_numbers():
             return [line.strip() for line in f.readlines() if line.strip()]
     return []
 
-# 📌 บันทึกเบอร์ลงไฟล์
-def save_phone_numbers(phone_numbers):
-    with open(phone_file, "w") as f:
-        f.write("\n".join(phone_numbers) + "\n")
-
 phone_numbers = load_phone_numbers()
 
 # 📌 ดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
     pattern = r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)"
-    matches = set(re.findall(pattern, text))  # ใช้ `set()` เพื่อลดค่าซ้ำ
-    return list(matches)
+    return list(set(re.findall(pattern, text)))  # ใช้ `set()` เพื่อลดค่าซ้ำ
 
-# 📌 ส่ง API รับซอง (เร็วขึ้น)
+# 📌 ส่ง API รับซอง (ใช้ aiohttp แทน requests)
 async def claim_angpao(code, phone):
-    url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
-    headers = {"User-Agent": "Mozilla/5.0"}  # ปรับ header ให้ API เร็วขึ้น
-    try:
-        async with requests.Session() as session:
-            response = await asyncio.to_thread(session.get, url, headers=headers, timeout=2)
-            return response.json() if response.status_code == 200 else None
-    except Exception:
-        return None
+    url = f"https://gift.truemoney.com/campaign/vouchers/{code}/redeem"
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    payload = {"mobile": phone, "voucher_hash": code}
 
-# 📌 ประมวลผลซอง (เร็วขึ้น)
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(url, json=payload, headers=headers, timeout=2) as response:
+                return await response.json() if response.status == 200 else None
+        except Exception:
+            return None
+
+# 📌 ประมวลผลซอง
 async def process_angpao(angpao_codes):
     tasks = []
     for angpao_code in angpao_codes:
-        if redis_client.get(angpao_code):  # เช็คว่าซองนี้รับไปหรือยัง
+        if redis_client.get(angpao_code):  # กันรับซ้ำ
             continue
-        redis_client.setex(angpao_code, 3600, "claimed")  # กันรับซ้ำ 1 ชม.
+        redis_client.setex(angpao_code, 3600, "claimed")
 
-        link = f"https://gift.truemoney.com/campaign/?v={angpao_code}"
         print(f"🎁 พบซอง: {angpao_code}")
 
         for phone in phone_numbers:
             tasks.append(claim_angpao(angpao_code, phone))
 
-    responses = await asyncio.gather(*tasks)  # 🚀 รัน API พร้อมกัน
+    responses = await asyncio.gather(*tasks)
 
     results = []
     for response, phone in zip(responses, phone_numbers):
-        if response and "data" in response and "voucher" in response["data"]:
-            amount = response["data"]["voucher"].get("amount_baht", "0.00")
-            status_msg = response["status"].get("message", "สำเร็จ")
+        if response and "voucher" in response:
+            amount = response["voucher"].get("amount_baht", "0.00")
+            status_msg = response.get("status", {}).get("message", "สำเร็จ")
         else:
             amount = "0.00"
             status_msg = "❌ ไม่สามารถดึงข้อมูลได้"
@@ -81,13 +76,13 @@ async def process_angpao(angpao_codes):
         results.append(f"📲 เบอร์: {phone}\n💰 ได้รับ: {amount} บาท\n📜 สถานะ: {status_msg}")
 
     if results:
-        final_msg = f"🎉 ซองใหม่! 🎁\n🔗 **[กดรับซอง]({link})**\n\n" + "\n\n".join(results)
+        final_msg = f"🎉 ซองใหม่! 🎁\n🔗 **[กดรับซอง](https://gift.truemoney.com/campaign/?v={angpao_code})**\n\n" + "\n\n".join(results)
         await client.send_message(notify_group_id, final_msg, link_preview=False)
 
 # 📌 ดักจับข้อความทุกประเภท
 @client.on(events.NewMessage)
 async def message_handler(event):
-    text = event.raw_text.lower()
+    text = event.raw_text
     angpao_codes = extract_angpao_codes(text)
 
     if event.message.entities:
@@ -122,30 +117,6 @@ def scan_qr_code(image_path):
         angpao_codes.update(extract_angpao_codes(text))
 
     return list(angpao_codes)
-
-# 📌 คำสั่งเพิ่ม/ลบเบอร์
-@client.on(events.NewMessage(pattern=r"/(add|remove|list)"))
-async def manage_phone(event):
-    global phone_numbers
-    if event.sender_id != admin_id:
-        return await event.reply("❌ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้")
-
-    command, *args = event.text.split()
-    if command == "/add" and args:
-        new_number = args[0]
-        if new_number not in phone_numbers:
-            phone_numbers.append(new_number)
-            save_phone_numbers(phone_numbers)
-            await event.reply(f"✅ เพิ่มเบอร์ {new_number} สำเร็จ!")
-    elif command == "/remove" and args:
-        del_number = args[0]
-        if del_number in phone_numbers:
-            phone_numbers.remove(del_number)
-            save_phone_numbers(phone_numbers)
-            await event.reply(f"✅ ลบเบอร์ {del_number} สำเร็จ!")
-    elif command == "/list":
-        phone_list = "\n".join(phone_numbers) if phone_numbers else "ไม่มีเบอร์ในระบบ"
-        await event.reply(f"📜 เบอร์ที่ใช้งานอยู่:\n{phone_list}")
 
 # 📌 เริ่มรันบอท
 print("🔄 กำลังรันบอท...")
