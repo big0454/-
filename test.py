@@ -36,18 +36,19 @@ def extract_angpao_codes(text):
     pattern = r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)"
     return list(set(re.findall(pattern, text)))  # ใช้ `set()` เพื่อลดค่าซ้ำ
 
-# 📌 ส่ง API รับซอง (ใช้ aiohttp แทน requests)
+# 📌 ส่ง API รับซอง (ปรับปรุงให้รับแน่นอน)
 async def claim_angpao(code, phone):
-    url = f"https://gift.truemoney.com/campaign/vouchers/{code}/redeem"
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    payload = {"mobile": phone, "voucher_hash": code}
+    url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(url, json=payload, headers=headers, timeout=2) as response:
-                return await response.json() if response.status == 200 else None
-        except Exception:
-            return None
+            async with session.get(url, headers=headers, timeout=2) as response:
+                if response.status == 200:
+                    return await response.json()
+        except Exception as e:
+            print(f"⚠️ รับซองล้มเหลว: {e}")
+    return None
 
 # 📌 ประมวลผลซอง
 async def process_angpao(angpao_codes):
@@ -66,9 +67,9 @@ async def process_angpao(angpao_codes):
 
     results = []
     for response, phone in zip(responses, phone_numbers):
-        if response and "voucher" in response:
-            amount = response["voucher"].get("amount_baht", "0.00")
-            status_msg = response.get("status", {}).get("message", "สำเร็จ")
+        if response and "data" in response and "voucher" in response["data"]:
+            amount = response["data"]["voucher"].get("amount_baht", "0.00")
+            status_msg = response["status"].get("message", "สำเร็จ")
         else:
             amount = "0.00"
             status_msg = "❌ ไม่สามารถดึงข้อมูลได้"
