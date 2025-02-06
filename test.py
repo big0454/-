@@ -119,6 +119,35 @@ def scan_qr_code(image_path):
 
     return list(angpao_codes)
 
+    # 📌 บันทึกเบอร์ลงไฟล์
+def save_phone_numbers(phone_numbers):
+    with open(phone_file, "w") as f:
+        f.write("\n".join(phone_numbers) + "\n")
+
+# 📌 คำสั่งเพิ่ม/ลบเบอร์
+@client.on(events.NewMessage(pattern=r"/(add|remove|list)"))
+async def manage_phone(event):
+    global phone_numbers
+    if event.sender_id != admin_id:
+        return await event.reply("❌ คุณไม่มีสิทธิ์ใช้งานคำสั่งนี้")
+
+    command, *args = event.text.split()
+    if command == "/add" and args:
+        new_number = args[0]
+        if new_number not in phone_numbers:
+            phone_numbers.append(new_number)
+            save_phone_numbers(phone_numbers)
+            await event.reply(f"✅ เพิ่มเบอร์ {new_number} สำเร็จ!")
+    elif command == "/remove" and args:
+        del_number = args[0]
+        if del_number in phone_numbers:
+            phone_numbers.remove(del_number)
+            save_phone_numbers(phone_numbers)
+            await event.reply(f"✅ ลบเบอร์ {del_number} สำเร็จ!")
+    elif command == "/list":
+        phone_list = "\n".join(phone_numbers) if phone_numbers else "ไม่มีเบอร์ในระบบ"
+        await event.reply(f"📜 เบอร์ที่ใช้งานอยู่:\n{phone_list}")
+
 # 📌 เริ่มรันบอท
 print("🔄 กำลังรันบอท...")
 with client:
