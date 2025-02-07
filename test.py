@@ -2,7 +2,6 @@ import re
 import asyncio
 import aiohttp
 import os
-import redis
 import cv2
 import numpy as np
 from pyzbar.pyzbar import decode
@@ -16,11 +15,9 @@ notify_group_id = -1002405260670  # ไอดีกลุ่มแจ้งเ�
 admin_id = 7094215368  # ไอดีแอดมินที่เพิ่ม/ลบเบอร์ได้
 phone_file = "phone_numbers.txt"
 
-# 🚀 ตั้งค่า Redis
-redis_client = redis.StrictRedis(host='localhost', port=6379, db=0, decode_responses=True)
-
-# 🔥 สร้าง client
+# 🔥 สร้าง client และปิด Markdown เพื่อลดความหน่วง
 client = TelegramClient("truemoney_bot", api_id, api_hash)
+client.parse_mode = "none"  # ปิด Markdown เพื่อให้ข้อความทำงานเร็วขึ้น
 
 # 📌 โหลดเบอร์จากไฟล์
 def load_phone_numbers():
@@ -36,49 +33,28 @@ def extract_angpao_codes(text):
     pattern = r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)"
     return list(set(re.findall(pattern, text)))  # ใช้ `set()` เพื่อลดค่าซ้ำ
 
-# 📌 ส่ง API รับซอง (ปรับปรุงให้รับแน่นอน)
+# 📌 รับซองแบบเร็วที่สุด
 async def claim_angpao(code, phone):
     url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
     headers = {"User-Agent": "Mozilla/5.0"}
 
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, headers=headers, timeout=2) as response:
+            async with session.get(url, headers=headers, timeout=1) as response:
                 if response.status == 200:
                     return await response.json()
-        except Exception as e:
-            print(f"⚠️ รับซองล้มเหลว: {e}")
+        except Exception:
+            return None
     return None
 
-# 📌 ประมวลผลซอง
+# 📌 ประมวลผลซองแบบเร็วที่สุด
 async def process_angpao(angpao_codes):
-    tasks = []
     for angpao_code in angpao_codes:
-        if redis_client.get(angpao_code):  # กันรับซ้ำ
-            continue
-        redis_client.setex(angpao_code, 3600, "claimed")
-
         print(f"🎁 พบซอง: {angpao_code}")
 
+        # ใช้ asyncio.create_task เพื่อให้รับซองเร็วขึ้น
         for phone in phone_numbers:
-            tasks.append(claim_angpao(angpao_code, phone))
-
-    responses = await asyncio.gather(*tasks)
-
-    results = []
-    for response, phone in zip(responses, phone_numbers):
-        if response and "data" in response and "voucher" in response["data"]:
-            amount = response["data"]["voucher"].get("amount_baht", "0.00")
-            status_msg = response["status"].get("message", "สำเร็จ")
-        else:
-            amount = "0.00"
-            status_msg = "❌ ไม่สามารถดึงข้อมูลได้"
-
-        results.append(f"📲 เบอร์: {phone}\n💰 ได้รับ: {amount} บาท\n📜 สถานะ: {status_msg}")
-
-    if results:
-        final_msg = f"🎉 ซองใหม่! 🎁\n🔗 **[กดรับซอง](https://gift.truemoney.com/campaign/?v={angpao_code})**\n\n" + "\n\n".join(results)
-        await client.send_message(notify_group_id, final_msg, link_preview=False)
+            asyncio.create_task(claim_angpao(angpao_code, phone))
 
 # 📌 ดักจับข้อความทุกประเภท
 @client.on(events.NewMessage)
@@ -86,14 +62,17 @@ async def message_handler(event):
     text = event.raw_text
     angpao_codes = extract_angpao_codes(text)
 
+    # ดึงลิงก์จากข้อความที่ซ่อนอยู่
     if event.message.entities:
         for entity in event.message.entities:
             if isinstance(entity, MessageEntityTextUrl):
                 angpao_codes += extract_angpao_codes(entity.url)
 
     angpao_codes = list(set(angpao_codes))
+    
+    # ถ้าพบซอง รีบส่งไปประมวลผลทันที
     if angpao_codes:
-        await process_angpao(angpao_codes)
+        asyncio.create_task(process_angpao(angpao_codes))
 
 # 📌 ดักจับ QR Code จากรูปภาพ
 @client.on(events.NewMessage)
@@ -103,7 +82,7 @@ async def image_handler(event):
         angpao_codes = scan_qr_code(file_path)
 
         if angpao_codes:
-            await process_angpao(angpao_codes)
+            asyncio.create_task(process_angpao(angpao_codes))
 
         os.remove(file_path)
 
@@ -119,7 +98,7 @@ def scan_qr_code(image_path):
 
     return list(angpao_codes)
 
-    # 📌 บันทึกเบอร์ลงไฟล์
+# 📌 บันทึกเบอร์ลงไฟล์
 def save_phone_numbers(phone_numbers):
     with open(phone_file, "w") as f:
         f.write("\n".join(phone_numbers) + "\n")
