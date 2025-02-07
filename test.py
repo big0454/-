@@ -30,7 +30,15 @@ phone_numbers = load_phone_numbers()
 # 📌 ดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
     pattern = r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)"
-    return list(set(re.findall(pattern, text)))  # ใช้ `set()` เพื่อลดค่าซ้ำ
+    return list(set(re.findall(pattern, text)))
+
+# 📌 แจ้งเตือนไปที่กลุ่ม
+async def notify_group(angpao_code, results):
+    message = f"พบซองใหม่💥\nลิ้งค์ซอง: https://gift.truemoney.com/campaign/?v={angpao_code}\n\n"
+    for phone, status in results:
+        message += f"{phone} {'✅ รับสำเร็จ' if status else '❌ รับไม่สำเร็จ'}\n"
+
+    await client.send_message(notify_group_id, message)
 
 # 📌 รับซองแบบเร็วที่สุด
 async def claim_angpao(code, phone):
@@ -40,18 +48,18 @@ async def claim_angpao(code, phone):
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url, headers=headers, timeout=0.8) as response:
-                if response.status == 200:
-                    return await response.json()
+                return phone, response.status == 200
         except Exception:
-            return None
-    return None
+            return phone, False
 
 # 📌 ประมวลผลซองแบบเร็วที่สุด
-async def process_angpao(angpao_codes):
-    for angpao_code in angpao_codes:
-        print(f"🎁 พบซอง: {angpao_code}")
-        for phone in phone_numbers:
-            asyncio.create_task(claim_angpao(angpao_code, phone))
+async def process_angpao(angpao_code):
+    print(f"🎁 พบซอง: {angpao_code}")
+    
+    tasks = [claim_angpao(angpao_code, phone) for phone in phone_numbers]
+    results = await asyncio.gather(*tasks)
+
+    await notify_group(angpao_code, results)
 
 # 📌 ดักจับข้อความทุกประเภท
 @client.on(events.NewMessage)
@@ -68,8 +76,8 @@ async def message_handler(event):
     angpao_codes = list(set(angpao_codes))
     
     # ถ้าพบซอง รีบส่งไปประมวลผลทันที
-    if angpao_codes:
-        asyncio.create_task(process_angpao(angpao_codes))
+    for code in angpao_codes:
+        asyncio.create_task(process_angpao(code))
 
 # 📌 ดักจับ QR Code จากรูปภาพ
 @client.on(events.NewMessage)
@@ -79,7 +87,8 @@ async def image_handler(event):
         angpao_codes = scan_qr_code(file_path)
 
         if angpao_codes:
-            asyncio.create_task(process_angpao(angpao_codes))
+            for code in angpao_codes:
+                asyncio.create_task(process_angpao(code))
 
         os.remove(file_path)
 
