@@ -27,20 +27,19 @@ def load_phone_numbers():
 
 phone_numbers = load_phone_numbers()
 
+# 📌 ฟังก์ชันขยายลิงก์ย่อ
+async def expand_short_url(url):
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.head(url, allow_redirects=True, timeout=0.8) as response:
+                return response.url.human_repr()  # คืนค่า URL ปลายทาง
+        except Exception:
+            return url  # ถ้าไม่สามารถขยายได้ คืนค่าเดิม
+
 # 📌 ดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
-    pattern = r"https?://\s*gift\.\s*truemoney\.\s*com/\s*campaign/\s*\?\s*v=\s*([a-zA-Z0-9]+)"
-    matches = re.findall(pattern, text.replace(" ", ""))  # ลบช่องว่างก่อนค้นหา
-    return list(set(matches))
-
-# 📌 ตรวจสอบและขยายลิงก์ย่อ
-async def expand_short_url(url):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.head(url, allow_redirects=True, timeout=0.6) as response:
-                return str(response.url)  # คืนค่าลิงก์สุดท้ายหลัง redirect
-    except Exception:
-        return url  # ถ้าล้มเหลว ให้คืนค่าลิงก์เดิม
+    pattern = r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)"
+    return list(set(re.findall(pattern, text)))
 
 # 📌 แจ้งเตือนไปที่กลุ่ม
 async def notify_group(angpao_code, results):
@@ -75,22 +74,24 @@ async def process_angpao(angpao_code):
 @client.on(events.NewMessage)
 async def message_handler(event):
     text = event.raw_text
-    potential_urls = re.findall(r"https?://\S+", text)  # ดึง URL ทุกตัวจากข้อความ
-    expanded_urls = await asyncio.gather(*(expand_short_url(url) for url in potential_urls))  # ขยายลิงก์ทั้งหมด
+    links = re.findall(r"https?://\S+", text)  # ดึงทุกลิงก์จากข้อความปกติ
 
-    angpao_codes = []
-    for url in expanded_urls:
-        angpao_codes += extract_angpao_codes(url)
-
-    # ดึงลิงก์จากข้อความที่ซ่อนอยู่
+    # ดึงลิงก์จากข้อความสีฟ้า (MessageEntityTextUrl)
     if event.message.entities:
         for entity in event.message.entities:
             if isinstance(entity, MessageEntityTextUrl):
-                expanded_url = await expand_short_url(entity.url)
-                angpao_codes += extract_angpao_codes(expanded_url)
+                links.append(entity.url)
 
-    angpao_codes = list(set(angpao_codes))
+    # ขยายลิงก์ที่ถูกย่อก่อน
+    expanded_links = await asyncio.gather(*[expand_short_url(link) for link in links])
     
+    # ค้นหารหัสซองในลิงก์ที่ถูกขยาย
+    angpao_codes = []
+    for link in expanded_links:
+        angpao_codes += extract_angpao_codes(link)
+
+    angpao_codes = list(set(angpao_codes))  # ลบซ้ำ
+
     # ถ้าพบซอง รีบส่งไปประมวลผลทันที
     for code in angpao_codes:
         asyncio.create_task(process_angpao(code))
