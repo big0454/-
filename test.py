@@ -15,9 +15,8 @@ notify_group_id = -1002405260670  # ไอดีกลุ่มแจ้งเ�
 admin_id = 7094215368  # ไอดีแอดมินที่เพิ่ม/ลบเบอร์ได้
 phone_file = "phone_numbers.txt"
 
-# 🔥 สร้าง client และปิด Markdown เพื่อลดความหน่วง
+# 🔥 สร้าง client
 client = TelegramClient("truemoney_bot", api_id, api_hash)
-client.parse_mode = None  # ปิด Markdown เพื่อให้ข้อความทำงานเร็วขึ้น
 
 # 📌 โหลดเบอร์จากไฟล์
 def load_phone_numbers():
@@ -40,7 +39,7 @@ async def claim_angpao(code, phone):
 
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, headers=headers, timeout=1) as response:
+            async with session.get(url, headers=headers, timeout=0.8) as response:
                 if response.status == 200:
                     return await response.json()
         except Exception:
@@ -51,8 +50,6 @@ async def claim_angpao(code, phone):
 async def process_angpao(angpao_codes):
     for angpao_code in angpao_codes:
         print(f"🎁 พบซอง: {angpao_code}")
-
-        # ใช้ asyncio.create_task เพื่อให้รับซองเร็วขึ้น
         for phone in phone_numbers:
             asyncio.create_task(claim_angpao(angpao_code, phone))
 
