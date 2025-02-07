@@ -30,11 +30,13 @@ phone_numbers = load_phone_numbers()
 # 📌 ฟังก์ชันขยายลิงก์ย่อ
 async def expand_short_url(url):
     async with aiohttp.ClientSession() as session:
-        try:
-            async with session.head(url, allow_redirects=True, timeout=0.8) as response:
-                return response.url.human_repr()  # คืนค่า URL ปลายทาง
-        except Exception:
-            return url  # ถ้าไม่สามารถขยายได้ คืนค่าเดิม
+        for _ in range(2):  # ลองขยายลิงก์สูงสุด 3 ครั้ง
+            try:
+                async with session.get(url, allow_redirects=True, timeout=0.8) as response:
+                    return str(response.url)  # คืนค่า URL ปลายทาง
+            except Exception:
+                await asyncio.sleep(0.2)  # รอ 0.3 วินาทีก่อนลองใหม่
+    return url  # ถ้าขยายไม่ได้ ให้คืนค่าเดิม
 
 # 📌 ดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
@@ -84,7 +86,7 @@ async def message_handler(event):
 
     # ขยายลิงก์ที่ถูกย่อก่อน
     expanded_links = await asyncio.gather(*[expand_short_url(link) for link in links])
-    
+
     # ค้นหารหัสซองในลิงก์ที่ถูกขยาย
     angpao_codes = []
     for link in expanded_links:
