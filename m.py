@@ -1,5 +1,6 @@
 import re
-import requests
+import asyncio
+import aiohttp
 import os
 import cv2
 import numpy as np
@@ -10,8 +11,8 @@ from telethon.tl.types import MessageEntityTextUrl
 # 📌 ตั้งค่าบัญชี Telegram
 api_id = 29316101
 api_hash = "81d03af65c3d3a442f38559d3967e28c"
-notify_group_id = -1002405260670  # ไอดีกลุ่มที่จะแจ้งเตือน
-admin_id = 7094215368  # ไอดีของเจ้าของที่สามารถเพิ่ม/ลบเบอร์ได้
+notify_group_id = -1002405260670  # ไอดีกลุ่มแจ้งเตือน
+admin_id = 7094215368  # ไอดีแอดมินที่เพิ่ม/ลบเบอร์ได้
 phone_file = "phone_numbers.txt"
 
 # 🔥 สร้าง client
@@ -24,74 +25,75 @@ def load_phone_numbers():
             return [line.strip() for line in f.readlines() if line.strip()]
     return []
 
-# 📌 บันทึกเบอร์ลงไฟล์
-def save_phone_numbers(phone_numbers):
-    with open(phone_file, "w") as f:
-        f.write("\n".join(phone_numbers) + "\n")
-
-# 📌 อ่านเบอร์
 phone_numbers = load_phone_numbers()
 
-# 📌 ฟังก์ชันดึงรหัสซองจากข้อความ
+# 📌 ดึงรหัสซองจากข้อความ
 def extract_angpao_codes(text):
-    pattern = r"https?://gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)"
-    matches = re.findall(pattern, text)
+    pattern = r"https?://\s*gift\.\s*truemoney\.\s*com/\s*campaign/\s*\?\s*v=\s*([a-zA-Z0-9]+)"
+    matches = re.findall(pattern, text.replace(" ", ""))  # ลบช่องว่างก่อนค้นหา
+    return list(set(matches))
 
-    words = text.split()
-    for word in words:
-        found = re.findall(pattern, word)
-        if found:
-            matches.extend(found)
-
-    return list(set(matches))  # ลบค่าซ้ำออก
-
-# 📌 ฟังก์ชันส่ง API รับเงิน
-def claim_angpao(code, phone):
-    url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
+# 📌 ตรวจสอบและขยายลิงก์ย่อ
+async def expand_short_url(url):
     try:
-        response = requests.get(url, timeout=2)  # ลด timeout เหลือ 2 วินาที
-        return response.json() if response.status_code == 200 else None
+        async with aiohttp.ClientSession() as session:
+            async with session.head(url, allow_redirects=True, timeout=0.6) as response:
+                return str(response.url)  # คืนค่าลิงก์สุดท้ายหลัง redirect
     except Exception:
-        return None
+        return url  # ถ้าล้มเหลว ให้คืนค่าลิงก์เดิม
 
-# 📌 ฟังก์ชันประมวลผลซองอั่งเปา
-async def process_angpao(angpao_codes, original_text):
-    for angpao_code in angpao_codes:
-        link = f"https://gift.truemoney.com/campaign/?v={angpao_code}"
-        print(f"🎁 พบซอง: {angpao_code}")
+# 📌 แจ้งเตือนไปที่กลุ่ม
+async def notify_group(angpao_code, results):
+    message = f"พบซองใหม่💥\nลิ้งค์ซอง: https://gift.truemoney.com/campaign/?v={angpao_code}\n\n"
+    for phone, status in results:
+        message += f"{phone} {'✅ รับสำเร็จ' if status else '❌ รับไม่สำเร็จ'}\n"
 
-        results = []
-        for phone in phone_numbers:
-            response = claim_angpao(angpao_code, phone)
+    await client.send_message(notify_group_id, message)
 
-            if response and "data" in response and "voucher" in response["data"]:
-                amount = response["data"]["voucher"].get("amount_baht", "0.00")
-                status_msg = response["status"].get("message", "สำเร็จ")
-            else:
-                amount = "0.00"
-                status_msg = "❌ ไม่สามารถดึงข้อมูลได้"
+# 📌 รับซองแบบเร็วที่สุด
+async def claim_angpao(code, phone):
+    url = f"https://store.cyber-safe.pro/api/topup/truemoney/angpaofree/{code}/{phone}"
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-            result_text = f"📲 เบอร์: {phone}\n💰 ได้รับ: {amount} บาท\n📜 สถานะ: {status_msg}"
-            results.append(result_text)
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, headers=headers, timeout=0.6) as response:
+                return phone, response.status == 200
+        except Exception:
+            return phone, False
 
-        # 📌 แจ้งเตือนในกลุ่ม Telegram
-        final_msg = f"🎉 ซองใหม่! 🎁\n🔗 **[กดรับซองที่นี่]({link})**\n\n" + "\n\n".join(results)
-        await client.send_message(notify_group_id, final_msg, link_preview=False)
+# 📌 ประมวลผลซองแบบเร็วที่สุด
+async def process_angpao(angpao_code):
+    print(f"🎁 พบซอง: {angpao_code}")
+    
+    tasks = [claim_angpao(angpao_code, phone) for phone in phone_numbers]
+    results = await asyncio.gather(*tasks)
+
+    await notify_group(angpao_code, results)
 
 # 📌 ดักจับข้อความทุกประเภท
 @client.on(events.NewMessage)
 async def message_handler(event):
     text = event.raw_text
-    angpao_codes = extract_angpao_codes(text)
+    potential_urls = re.findall(r"https?://\S+", text)  # ดึง URL ทุกตัวจากข้อความ
+    expanded_urls = await asyncio.gather(*(expand_short_url(url) for url in potential_urls))  # ขยายลิงก์ทั้งหมด
 
+    angpao_codes = []
+    for url in expanded_urls:
+        angpao_codes += extract_angpao_codes(url)
+
+    # ดึงลิงก์จากข้อความที่ซ่อนอยู่
     if event.message.entities:
         for entity in event.message.entities:
             if isinstance(entity, MessageEntityTextUrl):
-                angpao_codes += extract_angpao_codes(entity.url)
+                expanded_url = await expand_short_url(entity.url)
+                angpao_codes += extract_angpao_codes(expanded_url)
 
-    angpao_codes = list(set(angpao_codes))  # ลบค่าซ้ำ
-    if angpao_codes:
-        await process_angpao(angpao_codes, text)
+    angpao_codes = list(set(angpao_codes))
+    
+    # ถ้าพบซอง รีบส่งไปประมวลผลทันที
+    for code in angpao_codes:
+        asyncio.create_task(process_angpao(code))
 
 # 📌 ดักจับ QR Code จากรูปภาพ
 @client.on(events.NewMessage)
@@ -101,7 +103,8 @@ async def image_handler(event):
         angpao_codes = scan_qr_code(file_path)
 
         if angpao_codes:
-            await process_angpao(angpao_codes, "QR Code")
+            for code in angpao_codes:
+                asyncio.create_task(process_angpao(code))
 
         os.remove(file_path)
 
@@ -110,12 +113,17 @@ def scan_qr_code(image_path):
     img = cv2.imread(image_path)
     qr_codes = decode(img)
 
-    angpao_codes = []
+    angpao_codes = set()
     for qr in qr_codes:
         text = qr.data.decode("utf-8")
-        angpao_codes += extract_angpao_codes(text)
+        angpao_codes.update(extract_angpao_codes(text))
 
-    return list(set(angpao_codes))
+    return list(angpao_codes)
+
+# 📌 บันทึกเบอร์ลงไฟล์
+def save_phone_numbers(phone_numbers):
+    with open(phone_file, "w") as f:
+        f.write("\n".join(phone_numbers) + "\n")
 
 # 📌 คำสั่งเพิ่ม/ลบเบอร์
 @client.on(events.NewMessage(pattern=r"/(add|remove|list)"))
@@ -131,18 +139,12 @@ async def manage_phone(event):
             phone_numbers.append(new_number)
             save_phone_numbers(phone_numbers)
             await event.reply(f"✅ เพิ่มเบอร์ {new_number} สำเร็จ!")
-        else:
-            await event.reply(f"⚠️ เบอร์ {new_number} มีอยู่แล้ว!")
-
     elif command == "/remove" and args:
         del_number = args[0]
         if del_number in phone_numbers:
             phone_numbers.remove(del_number)
             save_phone_numbers(phone_numbers)
             await event.reply(f"✅ ลบเบอร์ {del_number} สำเร็จ!")
-        else:
-            await event.reply(f"⚠️ ไม่พบเบอร์ {del_number} ในระบบ!")
-
     elif command == "/list":
         phone_list = "\n".join(phone_numbers) if phone_numbers else "ไม่มีเบอร์ในระบบ"
         await event.reply(f"📜 เบอร์ที่ใช้งานอยู่:\n{phone_list}")
