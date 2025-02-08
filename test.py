@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 from pyzbar.pyzbar import decode
 from telethon import TelegramClient, events
-from telethon.tl.types import MessageEntityTextUrl, KeyboardButtonUrl
+from telethon.tl.types import MessageEntityTextUrl, KeyboardButtonUrl, ReplyInlineMarkup
 
 # 📌 ตั้งค่าบัญชี Telegram
 api_id = 29316101
@@ -27,16 +27,15 @@ def load_phone_numbers():
 
 phone_numbers = load_phone_numbers()
 
-# 📌 ฟังก์ชันดึงรหัสซอง (รองรับลิงก์ที่ถูกดัดแปลง)
+# 📌 ฟังก์ชันทำความสะอาดลิงก์ (ลบช่องว่างและตัวอักษรแปลกปลอม)
+def clean_text(text):
+    return re.sub(r"\s+", "", text)
+
+# 📌 ดึงรหัสซองจากข้อความทุกประเภท
 def extract_angpao_codes(text):
-    # ทำความสะอาดข้อความ -> ลบช่องว่างและอักขระพิเศษ
-    cleaned_text = re.sub(r"[^\w\s:/?.=&-]", "", text)
-    cleaned_text = cleaned_text.replace(" ", "")
-
-    # Regex สำหรับลิงก์ซอง
+    text = clean_text(text)
     pattern = r"https?://gift\.truemoney\.com/campaign/\??v=([a-zA-Z0-9]+)"
-    matches = re.findall(pattern, cleaned_text)
-
+    matches = re.findall(pattern, text)
     return list(set(matches))
 
 # 📌 แจ้งเตือนไปที่กลุ่ม
@@ -70,28 +69,28 @@ async def process_angpao(angpao_code):
 
     await notify_group(angpao_code, results)
 
-# 📌 ดักจับข้อความทุกประเภท (รวมถึงปุ่ม)
+# 📌 ดักจับข้อความทุกประเภท
 @client.on(events.NewMessage)
 async def message_handler(event):
-    text = event.raw_text
-    angpao_codes = extract_angpao_codes(text)
+    angpao_codes = set()
 
-    # 🔹 ตรวจสอบลิงก์ที่ซ่อนอยู่ในข้อความ
+    # ✅ ดึงลิงก์จากข้อความปกติ
+    angpao_codes.update(extract_angpao_codes(event.raw_text))
+
+    # ✅ ดึงลิงก์จากข้อความที่ซ่อนอยู่
     if event.message.entities:
         for entity in event.message.entities:
             if isinstance(entity, MessageEntityTextUrl):
-                angpao_codes += extract_angpao_codes(entity.url)
+                angpao_codes.update(extract_angpao_codes(entity.url))
 
-    # 🔹 ตรวจสอบลิงก์จากปุ่ม
-    if event.message.reply_markup:
-        for row in event.message.reply_markup.rows:
-            for button in row.buttons:
+    # ✅ ดึงลิงก์จากปุ่มทั้งหมด
+    if event.message.reply_markup and isinstance(event.message.reply_markup, ReplyInlineMarkup):
+        for button_row in event.message.reply_markup.rows:
+            for button in button_row.buttons:
                 if isinstance(button, KeyboardButtonUrl):
-                    angpao_codes += extract_angpao_codes(button.url)
+                    angpao_codes.update(extract_angpao_codes(button.url))
 
-    angpao_codes = list(set(angpao_codes))
-    
-    # ถ้าพบซอง รีบส่งไปประมวลผลทันที
+    # ส่งซองไปประมวลผลทันที
     for code in angpao_codes:
         asyncio.create_task(process_angpao(code))
 
