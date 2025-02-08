@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 from pyzbar.pyzbar import decode
 from telethon import TelegramClient, events
-from telethon.tl.types import MessageEntityTextUrl
+from telethon.tl.types import MessageEntityTextUrl, KeyboardButtonUrl
 
 # 📌 ตั้งค่าบัญชี Telegram
 api_id = 29316101
@@ -27,11 +27,16 @@ def load_phone_numbers():
 
 phone_numbers = load_phone_numbers()
 
-# 📌 ดึงรหัสซองจากข้อความที่มีช่องว่างแทรกอยู่
+# 📌 ฟังก์ชันดึงรหัสซอง (รองรับลิงก์ที่ถูกดัดแปลง)
 def extract_angpao_codes(text):
-    # ใช้ regex ที่รองรับช่องว่างระหว่างตัวอักษร
-    pattern = r"https?://\s*gift\.\s*truemoney\.\s*com/\s*campaign/\s*\??\s*v=\s*([a-zA-Z0-9]+)"
-    matches = re.findall(pattern, text.replace(" ", ""))  # ลบช่องว่างก่อนค้นหา
+    # ทำความสะอาดข้อความ -> ลบช่องว่างและอักขระพิเศษ
+    cleaned_text = re.sub(r"[^\w\s:/?.=&-]", "", text)
+    cleaned_text = cleaned_text.replace(" ", "")
+
+    # Regex สำหรับลิงก์ซอง
+    pattern = r"https?://gift\.truemoney\.com/campaign/\??v=([a-zA-Z0-9]+)"
+    matches = re.findall(pattern, cleaned_text)
+
     return list(set(matches))
 
 # 📌 แจ้งเตือนไปที่กลุ่ม
@@ -65,17 +70,24 @@ async def process_angpao(angpao_code):
 
     await notify_group(angpao_code, results)
 
-# 📌 ดักจับข้อความทุกประเภท
+# 📌 ดักจับข้อความทุกประเภท (รวมถึงปุ่ม)
 @client.on(events.NewMessage)
 async def message_handler(event):
     text = event.raw_text
     angpao_codes = extract_angpao_codes(text)
 
-    # ดึงลิงก์จากข้อความที่ซ่อนอยู่
+    # 🔹 ตรวจสอบลิงก์ที่ซ่อนอยู่ในข้อความ
     if event.message.entities:
         for entity in event.message.entities:
             if isinstance(entity, MessageEntityTextUrl):
                 angpao_codes += extract_angpao_codes(entity.url)
+
+    # 🔹 ตรวจสอบลิงก์จากปุ่ม
+    if event.message.reply_markup:
+        for row in event.message.reply_markup.rows:
+            for button in row.buttons:
+                if isinstance(button, KeyboardButtonUrl):
+                    angpao_codes += extract_angpao_codes(button.url)
 
     angpao_codes = list(set(angpao_codes))
     
