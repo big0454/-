@@ -30,13 +30,15 @@ phone_numbers = load_phone_numbers()
 # 📌 ดึงรหัสซองจากข้อความที่มีช่องว่างแทรกอยู่
 def extract_angpao_codes(text):
     # ใช้ regex ที่รองรับช่องว่างระหว่างตัวอักษร
-    pattern = r"https?://\s*gift\.\s*truemoney\.\s*com/\s*campaign/\s*\?\s*v=\s*([a-zA-Z0-9]+)"
+    pattern = r"https?://\s*gift\.\s*truemoney\.\s*com/\s*campaign/\s*\??\s*v=\s*([a-zA-Z0-9]+)"
     matches = re.findall(pattern, text.replace(" ", ""))  # ลบช่องว่างก่อนค้นหา
     return list(set(matches))
 
 # 📌 แจ้งเตือนไปที่กลุ่ม
 async def notify_group(angpao_code, results):
-    message = f"พบซองใหม่💥\nลิ้งค์ซอง: https://gift.truemoney.com/campaign/?v={angpao_code}\n\n"
+    correct_link = f"https://gift.truemoney.com/campaign?v={angpao_code}"
+    message = f"พบซองใหม่💥\nลิ้งค์ซอง: {correct_link}\n\n"
+    
     for phone, status in results:
         message += f"{phone} {'✅ รับสำเร็จ' if status else '❌ รับไม่สำเร็จ'}\n"
 
@@ -49,7 +51,7 @@ async def claim_angpao(code, phone):
 
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, headers=headers, timeout=0.6) as response:
+            async with session.get(url, headers=headers, timeout=0.3) as response:
                 return phone, response.status == 200
         except Exception:
             return phone, False
