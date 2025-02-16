@@ -36,21 +36,20 @@ def save_phone_numbers(phone_numbers):
 # 📌 ดึงรหัสซองจากข้อความ รวมถึงลิงก์ที่ถูกย่อ
 def extract_angpao_codes(text):
     decoded_text = urllib.parse.unquote(text)
-    print("🔍 ข้อความที่ได้รับ:", decoded_text)
-    pattern = r"https?://(?:[a-zA-Z0-9.-]+/)?gift\\.truemoney\\.com/campaign/\\?v=([a-zA-Z0-9]+)"
+    pattern = r"https?://(?:[a-zA-Z0-9.-]+/)?gift\.truemoney\.com/campaign/\?v=([a-zA-Z0-9]+)"
     matches = re.findall(pattern, decoded_text.replace(" ", ""))
-    print("🎯 รหัสซองที่ดึงได้:", matches)
     return list(set(matches))
 
-# 📌 ถอดรหัส QR Code
-def decode_qr(image_path):
-    image = cv2.imread(image_path)
-    if image is None:
-        return None
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    decoded_objects = decode(gray)
-    for obj in decoded_objects:
-        return obj.data.decode("utf-8")
+# 📌 ดึงรหัสซองจาก QR Code
+def extract_qr_code(image_path):
+    img = cv2.imread(image_path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    barcodes = decode(gray)
+    for barcode in barcodes:
+        url = barcode.data.decode("utf-8")
+        codes = extract_angpao_codes(url)
+        if codes:
+            return codes[0]
     return None
 
 # 📌 แจ้งเตือนไปที่กลุ่ม
@@ -73,7 +72,7 @@ async def claim_angpao(code, phone):
 
 # 📌 ประมวลผลซองแบบเร็วที่สุด โดยให้เบอร์สำคัญรับก่อน
 async def process_angpao(angpao_code):
-    print("🔄 กำลังรับซอง...")
+    print("🔄 กำลังรันบอท...")
     priority_numbers = ["0951417365", "0659599070"]
     other_numbers = [p for p in phone_numbers if p not in priority_numbers]
     tasks = [claim_angpao(angpao_code, phone) for phone in priority_numbers if phone in phone_numbers]
@@ -91,18 +90,6 @@ async def message_handler(event):
     if angpao_codes:
         for code in angpao_codes:
             asyncio.create_task(process_angpao(code))
-
-# 📌 ดักจับไฟล์ QR Code
-@client.on(events.NewMessage)
-async def qr_handler(event):
-    if event.photo:
-        file_path = await event.download_media()
-        qr_text = decode_qr(file_path)
-        if qr_text:
-            angpao_codes = extract_angpao_codes(qr_text)
-            if angpao_codes:
-                for code in angpao_codes:
-                    asyncio.create_task(process_angpao(code))
 
 # 📌 คำสั่งเพิ่ม/ลบ/เช็คเบอร์
 @client.on(events.NewMessage(pattern=r"/(add|remove|list)"))
