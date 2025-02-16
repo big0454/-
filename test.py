@@ -65,7 +65,7 @@ async def claim_angpao(code, phone):
 
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.get(url, headers=headers, timeout=0.3) as response:
+            async with session.get(url, headers=headers, timeout=0.7) as response:
                 return phone, response.status == 200
         except Exception:
             return phone, False
